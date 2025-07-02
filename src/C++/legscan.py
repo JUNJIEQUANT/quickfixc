@@ -52,6 +52,11 @@ class EnhancedLegacyCryptoScanner:
             r'printf\s*\(',      # Debug/logging output
             r'std::cout\s*<<',   # Console output
             r'LOG\w*\s*\(',      # Logging statements
+            r'const\s+int\s+\w*(?:DES|TRADES?|SIDES?)\w*\s*=',  # FIX protocol constants
+            r'EncryptMethod_\w+\s*=',     # FIX protocol encryption method fields
+            r'TrdType_\w+\s*=',           # FIX trade type fields  
+            r'NoSides?\w*\s*=',           # FIX sides-related fields
+            r'select_nodes?\(',           # XML library functions
         ]
         
         # High-confidence indicators (reduce false positives)
@@ -160,8 +165,8 @@ class EnhancedLegacyCryptoScanner:
                 'Weak_Cipher': {
                     'patterns': [
                         r'RC4\b',
-                        r'DES\b(?!C)',  # Avoid matching DESC, DESCRIPTION
-                        r'3DES\b',
+                        r'(?<![A-Za-z_])DES\b(?!C)',  # Must be word boundary on both sides
+                        r'(?<![A-Za-z_])3DES\b',
                         r'MD5\b',
                         r'SHA1\b(?!6|28|384|512)',  # Avoid matching SHA-2 variants
                     ],
@@ -184,7 +189,7 @@ class EnhancedLegacyCryptoScanner:
             
             'file_types': ['.cpp', '.h', '.hpp', '.cc', '.cxx', '.c'],
             'exclude_dirs': ['test', 'tests', 'examples', 'docs', '.git'],
-            'exclude_files': ['*_test.cpp', '*_example.cpp']
+            'exclude_files': ['*_test.cpp', '*_example.cpp', 'pugixml*', 'double-conversion*']
         }
 
     def export_config(self, output_path: str) -> None:
@@ -216,6 +221,13 @@ class EnhancedLegacyCryptoScanner:
     def calculate_confidence(self, line: str, context_lines: List[str], algorithm: str) -> ConfidenceLevel:
         """Calculate confidence level for the finding"""
         confidence_score = 0
+        
+        if re.search(r'const\s+\w+\s+\w+(?:Method|Type)_\w+\s*=', line):
+            return ConfidenceLevel.LOW
+        
+        # Check for enum/constant definitions (lower confidence) 
+        if re.search(r'const\s+(?:int|char)\s+\w+\s*=', line):
+            confidence_score -= 2
         
         # Check for function calls (higher confidence)
         for pattern in self.high_confidence_indicators['function_calls']:
