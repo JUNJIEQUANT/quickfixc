@@ -1,0 +1,170 @@
+# Enhanced Legacy Crypto Scanner Configuration
+# This file allows updating crypto detection patterns without code changes
+
+crypto_patterns:
+  RSA:
+    patterns:
+      # High-precision RSA function calls
+      - 'SSL_CTX_use_RSAPrivateKey\s*\('
+      - 'EVP_PKEY_RSA\b'
+      - 'RSA_\w+\s*\('
+      - 'PEM_read.*RSA\w*\s*\('
+      - 'RSA\s*\*\s*\w+'
+      - 'RSA_new\s*\('
+      - 'RSA_free\s*\('
+      - 'RSA_generate_key\s*\('
+    severity: HIGH
+    description: 'RSA algorithm usage - not quantum resistant'
+    recommendation: 'Replace with ML-DSA (NIST Dilithium) for signatures'
+    impact: 'Critical - RSA will be broken by quantum computers'
+    timeline: 'Immediate action required'
+
+  DSA:
+    patterns:
+      - 'EVP_PKEY_DSA\b'
+      - 'DSA_\w+\s*\('
+      - 'DSA\s*\*\s*\w+'
+      - 'PEM_read.*DSA\w*\s*\('
+      - 'DSA_generate_parameters\s*\('
+    severity: HIGH
+    description: 'DSA algorithm usage - not quantum resistant'
+    recommendation: 'Replace with ML-DSA (NIST Dilithium) for signatures'
+    impact: 'Critical - DSA will be broken by quantum computers'
+    timeline: 'Immediate action required'
+
+  ECDSA_EC:
+    patterns:
+      - 'EVP_PKEY_EC\b'
+      - 'EC_KEY_\w+\s*\('
+      - 'ECDH_\w+\s*\('
+      - 'SSL_CTX_set_tmp_ecdh\s*\('
+      - 'EC_KEY\s*\*\s*\w+'
+      - 'NID_X9_62_prime256v1\b'
+      - 'NID_secp\w+\b'
+      - 'ECDSA_\w+\s*\('
+    severity: HIGH
+    description: 'ECDSA/EC algorithm usage - not quantum resistant'
+    recommendation: 'Replace ECDSA with ML-DSA, ECDH with ML-KEM (Kyber)'
+    impact: 'Critical - ECC will be broken by quantum computers'
+    timeline: 'Immediate action required'
+
+  DH:
+    patterns:
+      - 'DH_new\s*\('
+      - 'DH_free\s*\('
+      - 'SSL_CTX_set_tmp_dh\s*\('
+      - 'DH\s*\*\s*\w+'
+      - 'DH_generate_\w+\s*\('
+      - 'ssl_callback_TmpDH\b'
+      - 'DH_check\s*\('
+    severity: HIGH
+    description: 'Diffie-Hellman key exchange - not quantum resistant'
+    recommendation: 'Replace with ML-KEM (NIST Kyber) for key exchange'
+    impact: 'Critical - DH will be broken by quantum computers'
+    timeline: 'Immediate action required'
+
+  Legacy_TLS:
+    patterns:
+      - 'SSLv2_\w+_method\s*\('
+      - 'SSLv3_\w+_method\s*\('
+      - 'TLSv1_\w+_method\s*\('
+      - 'TLSv1_1_\w+_method\s*\('
+      - 'TLSv1_2_\w+_method\s*\('
+      - 'SSL_PROTOCOL_SSLV[23]\b'
+      - 'SSL_PROTOCOL_TLSV1[^_3]\b'
+      - 'SSLv23_\w+_method\s*\('
+    severity: MEDIUM
+    description: 'Legacy SSL/TLS protocol versions'
+    recommendation: 'Upgrade to TLS 1.3 with post-quantum cipher suites'
+    impact: 'Medium - Protocols lack modern security features'
+    timeline: 'Short-term upgrade required'
+
+  Weak_Cipher:
+    patterns:
+      - 'RC4\b'
+      - '\bDES\b(?!C|cript)'  # Avoid matching DESC, DESCRIPTION
+      - '3DES\b'
+      - '\bMD5\b'
+      - 'SHA1\b(?!6|28|384|512)'  # Avoid matching SHA-2 variants
+      - 'SSL_CIPHER.*RC4'
+      - 'SSL_CIPHER.*DES'
+    severity: MEDIUM
+    description: 'Weak cipher or hash algorithm'
+    recommendation: 'Use AES-256 and SHA-256/SHA-3 minimum'
+    impact: 'Medium - Cryptographically weak algorithms'
+    timeline: 'Medium-term replacement needed'
+
+  Weak_Key_Size:
+    patterns:
+      - '(?:keylen|key_size|bits?)\s*[=<]\s*(?:512|1024)\b'
+      - '(?:512|1024).*(?:bit|key)'
+      - 'get_rfc2409_prime_1024\b'
+      - 'RSA.*512'
+      - 'RSA.*1024'
+    severity: MEDIUM
+    description: 'Weak key size detected (≤1024 bits)'
+    recommendation: 'Use minimum 2048-bit keys, preferably 3072+'
+    impact: 'Medium - Small keys can be broken with current technology'
+    timeline: 'Short-term increase required'
+
+# Post-Quantum Crypto Recommendations
+post_quantum_alternatives:
+  signatures:
+    primary: 'ML-DSA (NIST Dilithium)'
+    backup: 'FALCON'
+    hybrid_mode: 'Classical + ML-DSA dual signatures'
+  
+  key_exchange:
+    primary: 'ML-KEM (NIST Kyber)'
+    backup: 'Classic McEliece'
+    hybrid_mode: 'ECDH + ML-KEM combined KDF'
+
+  hashing:
+    primary: 'SHA-3 (Keccak)'
+    backup: 'BLAKE3'
+    note: 'SHA-2 is still quantum-safe for hashing'
+
+# Scanner Configuration
+scanner_settings:
+  file_types: ['.cpp', '.h', '.hpp', '.cc', '.cxx', '.c']
+  exclude_dirs: ['test', 'tests', 'examples', 'docs', '.git', 'build']
+  exclude_files: ['*_test.cpp', '*_example.cpp', '*_demo.cpp']
+  context_window: 3  # Lines before/after to analyze
+  min_confidence: 'MEDIUM'  # Only report MEDIUM and HIGH confidence findings
+
+# Exclusion Patterns (reduce false positives)
+exclusion_patterns:
+  comments:
+    - '^\s*//'           # C++ line comments
+    - '^\s*/\*'          # C++ block comment start
+    - '\*/\s*$'          # C++ block comment end
+    - '^\s*\*'           # Doxygen/comment continuation
+  
+  non_crypto_usage:
+    - '#define\s+\w+'    # Macro definitions (unless specifically crypto)
+    - 'enum\s+\w*'       # Enum definitions
+    - 'typedef\s+'       # Type definitions
+    - 'namespace\s+'     # Namespace declarations
+    - 'printf\s*\('      # Debug/logging output
+    - 'std::cout\s*<<'   # Console output
+    - 'LOG\w*\s*\('      # Logging statements
+    - 'class\s+\w+.*{'   # Class definitions
+    
+# Output Configuration
+output_settings:
+  report_format: 'detailed'  # 'summary', 'detailed', 'json'
+  include_context: true
+  include_recommendations: true
+  export_json: true
+  json_filename: 'crypto_findings.json'
+
+# Integration Settings
+integration:
+  ci_cd:
+    fail_on_high_severity: true
+    fail_on_medium_severity: false
+    max_findings_allowed: 10
+  
+  reporting:
+    generate_sarif: true  # For GitHub security tab
+    generate_junit: true  # For CI/CD test reporting

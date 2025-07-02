@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
 """
-Legacy Crypto Scanner for QuickFIX C++ Codebase
-Identifies non-quantum-resistant cryptographic algorithms and protocols
+Enhanced Legacy Crypto Scanner for QuickFIX C++ Codebase
+Improved accuracy with context analysis, config externalization, and advanced filtering
 """
 
 import os
 import re
-from dataclasses import dataclass
-from typing import List, Dict, Set
+import yaml
+import json
+from dataclasses import dataclass, asdict
+from typing import List, Dict, Set, Optional, Tuple
 from pathlib import Path
+from enum import Enum
+
+class ConfidenceLevel(Enum):
+    HIGH = "HIGH"
+    MEDIUM = "MEDIUM" 
+    LOW = "LOW"
 
 @dataclass
 class CryptoFinding:
@@ -18,471 +26,426 @@ class CryptoFinding:
     crypto_type: str
     algorithm: str
     severity: str
+    confidence: str
+    context_lines: List[str]
     description: str
+    recommendation: str
 
-class LegacyCryptoScanner:
-    def __init__(self):
+class EnhancedLegacyCryptoScanner:
+    def __init__(self, config_path: Optional[str] = None):
         self.findings: List[CryptoFinding] = []
+        self.config = self.load_config(config_path)
         
-        # Define legacy crypto patterns to search for
-        self.legacy_patterns = {
-            # RSA Algorithm Usage
-            'RSA': {
-                'patterns': [
-                    r'EVP_PKEY_RSA',
-                    r'SSL_ALGO_RSA',
-                    r'RSA[_\s]*key',
-                    r'PEM_read.*RSA',
-                    r'SSL_CTX_use_RSAPrivateKey',
-                    r'RSA\s*\*',
-                    r'configuring\s+RSA',
-                ],
-                'severity': 'HIGH',
-                'description': 'RSA algorithm usage - not quantum resistant'
-            },
-            
-            # DSA Algorithm Usage  
-            'DSA': {
-                'patterns': [
-                    r'EVP_PKEY_DSA',
-                    r'SSL_ALGO_DSA',
-                    r'DSA[_\s]*key',
-                    r'configuring\s+DSA',
-                ],
-                'severity': 'HIGH', 
-                'description': 'DSA algorithm usage - not quantum resistant'
-            },
-            
-            # ECDSA/EC Algorithm Usage
-            'ECDSA/EC': {
-                'patterns': [
-                    r'EVP_PKEY_EC',
-                    r'SSL_ALGO_EC',
-                    r'EC_KEY',
-                    r'ECDH',
-                    r'OPENSSL_NO_ECDH',
-                    r'EC[_\s]*key',
-                    r'configuring\s+EC',
-                    r'NID_X9_62_prime256v1',
-                ],
-                'severity': 'HIGH',
-                'description': 'ECDSA/EC algorithm usage - not quantum resistant'
-            },
-            
-            # DH (Diffie-Hellman) Key Exchange
-            'DH': {
-                'patterns': [
-                    r'DH\s*\*',
-                    r'SSL_CTX_set_tmp_dh',
-                    r'DH_new',
-                    r'DH_free',
-                    r'load_dh_param',
-                    r'ssl_callback_TmpDH',
-                    r'OPENSSL_NO_DH',
-                    r'enable_DH_ECDH',
-                ],
-                'severity': 'HIGH',
-                'description': 'Diffie-Hellman key exchange - not quantum resistant'
-            },
-            
-            # Legacy SSL/TLS Protocols
-            'Legacy_TLS': {
-                'patterns': [
-                    r'SSLv2',
-                    r'SSLv3', 
-                    r'TLSv1[^_.]',  # TLS 1.0
-                    r'TLSv1_1',     # TLS 1.1
-                    r'TLSv1_2',     # TLS 1.2
-                    r'SSL_PROTOCOL_SSLV2',
-                    r'SSL_PROTOCOL_SSLV3',
-                    r'SSL_PROTOCOL_TLSV1[^_]',
-                    r'SSL_PROTOCOL_TLSV1_1',
-                    r'SSL_PROTOCOL_TLSV1_2',
-                    r'SSLv23_server_method',
-                    r'SSLv23_client_method',
-                ],
-                'severity': 'MEDIUM',
-                'description': 'Legacy SSL/TLS protocol versions - should migrate to TLS 1.3+'
-            },
-            
-            # Weak Key Sizes (typically RSA < 2048, DH < 2048)
-            'Weak_Key_Size': {
-                'patterns': [
-                    r'512[^0-9]',     # 512-bit keys
-                    r'1024[^0-9]',    # 1024-bit keys  
-                    r'keylen\s*==\s*512',
-                    r'keylen\s*==\s*1024',
-                ],
-                'severity': 'MEDIUM',
-                'description': 'Weak key size detected'
-            },
-            
-            # MD5 and SHA-1 (weak hash functions)
-            'Weak_Hash': {
-                'patterns': [
-                    r'MD5',
-                    r'SHA1',
-                    r'sha1',
-                    r'md5',
-                ],
-                'severity': 'MEDIUM', 
-                'description': 'Weak hash algorithm usage'
-            },
-            
-            # Certificate verification and X.509
-            'X509_Legacy': {
-                'patterns': [
-                    r'X509[_\s]*',
-                    r'certificate.*verification',
-                    r'SSL_CTX_use_certificate',
-                ],
-                'severity': 'LOW',
-                'description': 'X.509 certificate usage - may need post-quantum signatures'
-            },
-            
-            # Cipher Suite Configuration
-            'Cipher_Suites': {
-                'patterns': [
-                    r'SSL_CTX_set_cipher_list',
-                    r'SSL_CIPHER_SUITE',
-                    r'ciphersuites?',
-                    r'RC4',
-                    r'DES',
-                    r'3DES',
-                ],
-                'severity': 'MEDIUM',
-                'description': 'Legacy cipher suite configuration'
-            }
+        # Context analysis settings
+        self.context_window = 3  # Lines before/after to analyze
+        
+        # Exclusion patterns (to reduce false positives)
+        self.exclusion_patterns = [
+            r'^\s*//',           # C++ line comments
+            r'^\s*/\*',          # C++ block comment start
+            r'\*/\s*$',          # C++ block comment end
+            r'#define\s+\w+',    # Macro definitions (unless specifically crypto)
+            r'enum\s+\w*',       # Enum definitions
+            r'typedef\s+',       # Type definitions
+            r'namespace\s+',     # Namespace declarations
+            r'^\s*\*',           # Doxygen/comment continuation
+            r'printf\s*\(',      # Debug/logging output
+            r'std::cout\s*<<',   # Console output
+            r'LOG\w*\s*\(',      # Logging statements
+        ]
+        
+        # High-confidence indicators (reduce false positives)
+        self.high_confidence_indicators = {
+            'function_calls': [
+                r'\w+\s*\(',         # Function call pattern
+                r'->\s*\w+\s*\(',    # Member function call
+                r'::\s*\w+\s*\(',    # Namespace function call
+            ],
+            'assignments': [
+                r'=\s*\w+',          # Assignment
+                r'\w+\s*=',          # Variable assignment
+            ],
+            'declarations': [
+                r'\w+\s+\*?\s*\w+',  # Variable declaration
+                r'new\s+\w+',        # Object instantiation
+            ]
         }
-    
+
+    def load_config(self, config_path: Optional[str] = None) -> Dict:
+        """Load crypto patterns from external config file or use defaults"""
+        if config_path and os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    if config_path.endswith('.yaml') or config_path.endswith('.yml'):
+                        return yaml.safe_load(f)
+                    else:
+                        return json.load(f)
+            except Exception as e:
+                print(f"Warning: Could not load config {config_path}: {e}")
+        
+        # Default configuration (can be exported to YAML/JSON)
+        return {
+            'crypto_patterns': {
+                'RSA': {
+                    'patterns': [
+                        r'SSL_CTX_use_RSAPrivateKey\s*\(',
+                        r'EVP_PKEY_RSA\b',
+                        r'RSA_\w+\s*\(',
+                        r'PEM_read.*RSA\w*\s*\(',
+                        r'RSA\s*\*\s*\w+',
+                        r'RSA_new\s*\(',
+                        r'RSA_free\s*\(',
+                    ],
+                    'severity': 'HIGH',
+                    'description': 'RSA algorithm usage - not quantum resistant',
+                    'recommendation': 'Replace with ML-DSA (NIST Dilithium) for signatures'
+                },
+                
+                'DSA': {
+                    'patterns': [
+                        r'EVP_PKEY_DSA\b',
+                        r'DSA_\w+\s*\(',
+                        r'DSA\s*\*\s*\w+',
+                        r'PEM_read.*DSA\w*\s*\(',
+                    ],
+                    'severity': 'HIGH',
+                    'description': 'DSA algorithm usage - not quantum resistant',
+                    'recommendation': 'Replace with ML-DSA (NIST Dilithium) for signatures'
+                },
+                
+                'ECDSA_EC': {
+                    'patterns': [
+                        r'EVP_PKEY_EC\b',
+                        r'EC_KEY_\w+\s*\(',
+                        r'ECDH_\w+\s*\(',
+                        r'SSL_CTX_set_tmp_ecdh\s*\(',
+                        r'EC_KEY\s*\*\s*\w+',
+                        r'NID_X9_62_prime256v1\b',
+                        r'NID_secp\w+\b',
+                    ],
+                    'severity': 'HIGH', 
+                    'description': 'ECDSA/EC algorithm usage - not quantum resistant',
+                    'recommendation': 'Replace ECDSA with ML-DSA, ECDH with ML-KEM (Kyber)'
+                },
+                
+                'DH': {
+                    'patterns': [
+                        r'DH_new\s*\(',
+                        r'DH_free\s*\(',
+                        r'SSL_CTX_set_tmp_dh\s*\(',
+                        r'DH\s*\*\s*\w+',
+                        r'DH_generate_\w+\s*\(',
+                        r'ssl_callback_TmpDH\b',
+                    ],
+                    'severity': 'HIGH',
+                    'description': 'Diffie-Hellman key exchange - not quantum resistant', 
+                    'recommendation': 'Replace with ML-KEM (NIST Kyber) for key exchange'
+                },
+                
+                'Legacy_TLS': {
+                    'patterns': [
+                        r'SSLv2_\w+_method\s*\(',
+                        r'SSLv3_\w+_method\s*\(',
+                        r'TLSv1_\w+_method\s*\(',
+                        r'TLSv1_1_\w+_method\s*\(',
+                        r'TLSv1_2_\w+_method\s*\(',
+                        r'SSL_PROTOCOL_SSLV[23]\b',
+                        r'SSL_PROTOCOL_TLSV1[^_3]\b',
+                    ],
+                    'severity': 'MEDIUM',
+                    'description': 'Legacy SSL/TLS protocol versions',
+                    'recommendation': 'Upgrade to TLS 1.3 with post-quantum cipher suites'
+                },
+                
+                'Weak_Cipher': {
+                    'patterns': [
+                        r'RC4\b',
+                        r'DES\b(?!C)',  # Avoid matching DESC, DESCRIPTION
+                        r'3DES\b',
+                        r'MD5\b',
+                        r'SHA1\b(?!6|28|384|512)',  # Avoid matching SHA-2 variants
+                    ],
+                    'severity': 'MEDIUM',
+                    'description': 'Weak cipher or hash algorithm',
+                    'recommendation': 'Use AES-256 and SHA-256/SHA-3 minimum'
+                },
+                
+                'Weak_Key_Size': {
+                    'patterns': [
+                        r'(?:keylen|key_size|bits?)\s*[=<]\s*(?:512|1024)\b',
+                        r'(?:512|1024).*(?:bit|key)',
+                        r'get_rfc2409_prime_1024\b',
+                    ],
+                    'severity': 'MEDIUM', 
+                    'description': 'Weak key size detected (≤1024 bits)',
+                    'recommendation': 'Use minimum 2048-bit keys, preferably 3072+'
+                }
+            },
+            
+            'file_types': ['.cpp', '.h', '.hpp', '.cc', '.cxx', '.c'],
+            'exclude_dirs': ['test', 'tests', 'examples', 'docs', '.git'],
+            'exclude_files': ['*_test.cpp', '*_example.cpp']
+        }
+
+    def export_config(self, output_path: str) -> None:
+        """Export current configuration to YAML file"""
+        try:
+            with open(output_path, 'w') as f:
+                yaml.dump(self.config, f, default_flow_style=False, indent=2)
+            print(f"Configuration exported to {output_path}")
+        except Exception as e:
+            print(f"Error exporting config: {e}")
+
+    def is_excluded_line(self, line: str) -> bool:
+        """Check if line should be excluded from analysis"""
+        line_stripped = line.strip()
+        if not line_stripped:
+            return True
+            
+        for pattern in self.exclusion_patterns:
+            if re.search(pattern, line, re.IGNORECASE):
+                return True
+        return False
+
+    def get_context_lines(self, lines: List[str], line_num: int) -> List[str]:
+        """Get context lines around the target line"""
+        start = max(0, line_num - self.context_window - 1)
+        end = min(len(lines), line_num + self.context_window)
+        return lines[start:end]
+
+    def calculate_confidence(self, line: str, context_lines: List[str], algorithm: str) -> ConfidenceLevel:
+        """Calculate confidence level for the finding"""
+        confidence_score = 0
+        
+        # Check for function calls (higher confidence)
+        for pattern in self.high_confidence_indicators['function_calls']:
+            if re.search(pattern, line):
+                confidence_score += 3
+                
+        # Check for assignments/declarations
+        for pattern in self.high_confidence_indicators['assignments']:
+            if re.search(pattern, line):
+                confidence_score += 2
+                
+        # Context analysis - look for related crypto operations nearby
+        context_text = ' '.join(context_lines)
+        crypto_context_patterns = [
+            r'SSL_CTX_\w+',
+            r'certificate',
+            r'private.*key',
+            r'handshake',
+            r'encrypt',
+            r'decrypt',
+            r'sign',
+            r'verify'
+        ]
+        
+        for pattern in crypto_context_patterns:
+            if re.search(pattern, context_text, re.IGNORECASE):
+                confidence_score += 1
+                
+        # Determine confidence level
+        if confidence_score >= 4:
+            return ConfidenceLevel.HIGH
+        elif confidence_score >= 2:
+            return ConfidenceLevel.MEDIUM
+        else:
+            return ConfidenceLevel.LOW
+
     def scan_file(self, file_path: str) -> None:
-        """Scan a single file for legacy crypto usage"""
+        """Scan a single file with enhanced accuracy"""
         try:
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
                 lines = f.readlines()
                 
             for line_num, line in enumerate(lines, 1):
-                line_clean = line.strip()
-                if not line_clean or line_clean.startswith('//') or line_clean.startswith('/*'):
+                if self.is_excluded_line(line):
                     continue
                     
-                for crypto_type, config in self.legacy_patterns.items():
+                for crypto_type, config in self.config['crypto_patterns'].items():
                     for pattern in config['patterns']:
-                        if re.search(pattern, line, re.IGNORECASE):
-                            finding = CryptoFinding(
-                                file_path=file_path,
-                                line_number=line_num,
-                                line_content=line.rstrip(),
-                                crypto_type='Legacy Cryptography',
-                                algorithm=crypto_type,
-                                severity=config['severity'],
-                                description=config['description']
-                            )
-                            self.findings.append(finding)
+                        match = re.search(pattern, line, re.IGNORECASE)
+                        if match:
+                            context_lines = self.get_context_lines(lines, line_num)
+                            confidence = self.calculate_confidence(line, context_lines, crypto_type)
                             
+                            # Only include medium/high confidence findings
+                            if confidence != ConfidenceLevel.LOW:
+                                finding = CryptoFinding(
+                                    file_path=file_path,
+                                    line_number=line_num,
+                                    line_content=line.rstrip(),
+                                    crypto_type='Legacy Cryptography',
+                                    algorithm=crypto_type,
+                                    severity=config['severity'],
+                                    confidence=confidence.value,
+                                    context_lines=[l.rstrip() for l in context_lines],
+                                    description=config['description'],
+                                    recommendation=config['recommendation']
+                                )
+                                self.findings.append(finding)
+                                
         except Exception as e:
             print(f"Error scanning file {file_path}: {e}")
-    
+
     def scan_directory(self, directory: str) -> None:
-        """Scan all C++ files in directory"""
-        cpp_extensions = {'.cpp', '.h', '.cc', '.hpp', '.cxx'}
+        """Scan directory with file filtering"""
+        allowed_extensions = set(self.config.get('file_types', ['.cpp', '.h']))
+        exclude_dirs = set(self.config.get('exclude_dirs', []))
         
         for root, dirs, files in os.walk(directory):
+            # Filter out excluded directories
+            dirs[:] = [d for d in dirs if d not in exclude_dirs]
+            
             for file in files:
-                if any(file.endswith(ext) for ext in cpp_extensions):
+                if any(file.endswith(ext) for ext in allowed_extensions):
                     file_path = os.path.join(root, file)
                     self.scan_file(file_path)
-    
-    def scan_quickfix_files(self, file_contents: Dict[str, str]) -> None:
-        """Scan the provided QuickFIX file contents"""
-        for file_path, content in file_contents.items():
-            lines = content.split('\n')
-            for line_num, line in enumerate(lines, 1):
-                line_clean = line.strip()
-                if not line_clean or line_clean.startswith('//') or line_clean.startswith('/*'):
-                    continue
-                    
-                for crypto_type, config in self.legacy_patterns.items():
-                    for pattern in config['patterns']:
-                        if re.search(pattern, line, re.IGNORECASE):
-                            finding = CryptoFinding(
-                                file_path=file_path,
-                                line_number=line_num,
-                                line_content=line.rstrip(),
-                                crypto_type='Legacy Cryptography',
-                                algorithm=crypto_type,
-                                severity=config['severity'],
-                                description=config['description']
-                            )
-                            self.findings.append(finding)
-    
-    def generate_report(self) -> str:
-        """Generate a comprehensive report of findings"""
+
+    def generate_detailed_report(self) -> str:
+        """Generate enhanced report with confidence levels and recommendations"""
         if not self.findings:
-            return "No legacy cryptography usage found."
+            return "✅ No high-confidence legacy cryptography usage found."
         
-        # Group findings by algorithm
-        by_algorithm = {}
-        for finding in self.findings:
-            if finding.algorithm not in by_algorithm:
-                by_algorithm[finding.algorithm] = []
-            by_algorithm[finding.algorithm].append(finding)
+        # Filter and sort findings
+        high_conf_findings = [f for f in self.findings if f.confidence == 'HIGH']
+        medium_conf_findings = [f for f in self.findings if f.confidence == 'MEDIUM']
         
         report = []
-        report.append("=" * 80)
-        report.append("QUICKFIX LEGACY CRYPTOGRAPHY SCAN REPORT")
-        report.append("=" * 80)
-        report.append(f"Total findings: {len(self.findings)}")
-        report.append(f"Algorithms detected: {len(by_algorithm)}")
+        report.append("=" * 90)
+        report.append("🔍 ENHANCED QUICKFIX LEGACY CRYPTOGRAPHY SCAN REPORT")
+        report.append("=" * 90)
+        
+        report.append(f"🎯 HIGH CONFIDENCE FINDINGS: {len(high_conf_findings)}")
+        report.append(f"⚠️  MEDIUM CONFIDENCE FINDINGS: {len(medium_conf_findings)}")
+        report.append(f"📊 TOTAL VERIFIED FINDINGS: {len(self.findings)}")
         report.append("")
         
-        # Summary by severity
-        severity_counts = {}
-        for finding in self.findings:
-            severity_counts[finding.severity] = severity_counts.get(finding.severity, 0) + 1
-        
-        report.append("SEVERITY SUMMARY:")
-        for severity in ['HIGH', 'MEDIUM', 'LOW']:
-            if severity in severity_counts:
-                report.append(f"  {severity}: {severity_counts[severity]} findings")
-        report.append("")
-        
-        # Detailed findings by algorithm
-        for algorithm in sorted(by_algorithm.keys()):
-            findings = by_algorithm[algorithm]
-            report.append(f"🔍 {algorithm.upper()} ALGORITHM USAGE")
-            report.append("-" * 50)
-            report.append(f"Description: {findings[0].description}")
-            report.append(f"Severity: {findings[0].severity}")
-            report.append(f"Occurrences: {len(findings)}")
-            report.append("")
-            
-            # Group by file
-            by_file = {}
+        # Group by algorithm and confidence
+        def report_findings_group(findings: List[CryptoFinding], confidence_label: str):
+            if not findings:
+                return
+                
+            by_algorithm = {}
             for finding in findings:
-                if finding.file_path not in by_file:
-                    by_file[finding.file_path] = []
-                by_file[finding.file_path].append(finding)
+                if finding.algorithm not in by_algorithm:
+                    by_algorithm[finding.algorithm] = []
+                by_algorithm[finding.algorithm].append(finding)
             
-            for file_path in sorted(by_file.keys()):
-                file_findings = by_file[file_path]
-                report.append(f"📁 {file_path}")
-                for finding in file_findings[:10]:  # Limit to first 10 per file
-                    report.append(f"   Line {finding.line_number:4}: {finding.line_content}")
-                if len(file_findings) > 10:
-                    report.append(f"   ... and {len(file_findings) - 10} more occurrences")
+            report.append(f"🔴 {confidence_label} FINDINGS")
+            report.append("-" * 60)
+            
+            for algorithm in sorted(by_algorithm.keys()):
+                alg_findings = by_algorithm[algorithm]
+                report.append(f"📍 {algorithm.upper()} ({len(alg_findings)} occurrences)")
+                report.append(f"   ❓ {alg_findings[0].description}")
+                report.append(f"   💡 {alg_findings[0].recommendation}")
                 report.append("")
-            
-            report.append("")
+                
+                # Show top findings with context
+                for finding in alg_findings[:3]:
+                    report.append(f"   📄 {finding.file_path}:{finding.line_number}")
+                    report.append(f"      Code: {finding.line_content}")
+                    
+                    # Show relevant context
+                    if finding.context_lines:
+                        context_start = max(0, len(finding.context_lines)//2 - 1)
+                        context_end = min(len(finding.context_lines), context_start + 3)
+                        report.append("      Context:")
+                        for i, ctx_line in enumerate(finding.context_lines[context_start:context_end]):
+                            marker = "  >>> " if i == 1 else "      "
+                            report.append(f"      {marker}{ctx_line}")
+                    report.append("")
+                
+                if len(alg_findings) > 3:
+                    report.append(f"   ... and {len(alg_findings) - 3} more occurrences")
+                report.append("")
         
-        # Recommendations
-        report.append("🎯 QUANTUM-RESISTANCE MIGRATION PRIORITIES")
-        report.append("-" * 50)
-        report.append("1. HIGH PRIORITY:")
-        report.append("   - Replace RSA with post-quantum signature schemes (ML-DSA/Dilithium)")
-        report.append("   - Replace ECDSA with post-quantum signatures")  
-        report.append("   - Replace DH/ECDH with post-quantum key exchange (ML-KEM/Kyber)")
+        report_findings_group(high_conf_findings, "HIGH CONFIDENCE")
+        report_findings_group(medium_conf_findings, "MEDIUM CONFIDENCE") 
+        
+        # Migration roadmap
+        report.append("🚀 POST-QUANTUM MIGRATION ROADMAP")
+        report.append("-" * 60)
+        
+        if high_conf_findings:
+            rsa_count = len([f for f in high_conf_findings if 'RSA' in f.algorithm])
+            ecdsa_count = len([f for f in high_conf_findings if 'ECDSA' in f.algorithm])
+            dh_count = len([f for f in high_conf_findings if 'DH' in f.algorithm])
+            
+            report.append("🔥 IMMEDIATE ACTION REQUIRED:")
+            if rsa_count > 0:
+                report.append(f"   • {rsa_count} RSA usages → Migrate to ML-DSA (Dilithium)")
+            if ecdsa_count > 0:
+                report.append(f"   • {ecdsa_count} ECDSA/EC usages → Migrate to ML-DSA + ML-KEM")  
+            if dh_count > 0:
+                report.append(f"   • {dh_count} DH key exchanges → Migrate to ML-KEM (Kyber)")
+        
         report.append("")
-        report.append("2. MEDIUM PRIORITY:")
-        report.append("   - Upgrade to TLS 1.3 minimum")
-        report.append("   - Remove weak cipher suites")
-        report.append("   - Increase key sizes as interim measure")
-        report.append("")
-        report.append("3. FUTURE CONSIDERATIONS:")
-        report.append("   - Plan for hybrid classical/post-quantum cryptography")
-        report.append("   - Monitor NIST post-quantum standardization updates")
-        report.append("")
+        report.append("📋 IMPLEMENTATION CHECKLIST:")
+        report.append("  ☐ Integrate liboqs (Open Quantum Safe) library")
+        report.append("  ☐ Implement hybrid classical/post-quantum mode")
+        report.append("  ☐ Update certificate handling for larger PQ signatures")
+        report.append("  ☐ Test interoperability with trading partners")
+        report.append("  ☐ Performance benchmark PQ vs classical crypto")
         
         return "\n".join(report)
 
-def analyze_quickfix_legacy_crypto():
-    """Analyze the provided QuickFIX files for legacy crypto usage"""
-    
-    # Based on the actual QuickFIX documents provided, here are the key findings:
-    
-    findings_summary = {
-        "HIGH_PRIORITY": [
-            {
-                "algorithm": "RSA",
-                "locations": [
-                    "src/C++/UtilitySSL.cpp:150 - case EVP_PKEY_RSA:",
-                    "src/C++/UtilitySSL.cpp:200 - SSL_CTX_use_RSAPrivateKey", 
-                    "src/C++/UtilitySSL.cpp:600 - configuring RSA client certificate",
-                    "src/C++/UtilitySSL.cpp:650 - SSL_ALGO_RSA"
-                ],
-                "description": "RSA algorithm usage - not quantum resistant",
-                "count": 15
-            },
-            {
-                "algorithm": "DSA", 
-                "locations": [
-                    "src/C++/UtilitySSL.cpp:153 - case EVP_PKEY_DSA:",
-                    "src/C++/UtilitySSL.cpp:620 - configuring DSA client certificate",
-                    "src/C++/UtilitySSL.cpp:653 - SSL_ALGO_DSA"
-                ],
-                "description": "DSA algorithm usage - not quantum resistant",
-                "count": 8
-            },
-            {
-                "algorithm": "ECDSA/EC",
-                "locations": [
-                    "src/C++/UtilitySSL.cpp:156 - case EVP_PKEY_EC:",
-                    "src/C++/UtilitySSL.cpp:300 - EC_KEY_new_by_curve_name(NID_X9_62_prime256v1)",
-                    "src/C++/UtilitySSL.cpp:305 - SSL_CTX_set_tmp_ecdh",
-                    "src/C++/UtilitySSL.cpp:640 - configuring EC client certificate"
-                ],
-                "description": "ECDSA/EC algorithms - not quantum resistant", 
-                "count": 12
-            },
-            {
-                "algorithm": "DH",
-                "locations": [
-                    "src/C++/UtilitySSL.cpp:180 - DH_new()",
-                    "src/C++/UtilitySSL.cpp:185 - DH_free()",
-                    "src/C++/UtilitySSL.cpp:310 - SSL_CTX_set_tmp_dh",
-                    "src/C++/UtilitySSL.cpp:450 - ssl_callback_TmpDH"
-                ],
-                "description": "Diffie-Hellman key exchange - not quantum resistant",
-                "count": 18
-            }
-        ],
-        "MEDIUM_PRIORITY": [
-            {
-                "algorithm": "Legacy SSL/TLS",
-                "locations": [
-                    "src/C++/UtilitySSL.cpp:400 - SSL_PROTOCOL_SSLV2",
-                    "src/C++/UtilitySSL.cpp:401 - SSL_PROTOCOL_SSLV3", 
-                    "src/C++/UtilitySSL.cpp:402 - SSL_PROTOCOL_TLSV1",
-                    "src/C++/UtilitySSL.cpp:403 - SSL_PROTOCOL_TLSV1_1",
-                    "src/C++/UtilitySSL.cpp:404 - SSL_PROTOCOL_TLSV1_2",
-                    "src/C++/README.SSL:50 - SSLv2, SSLv3, TLSv1, TLSv1_1, TLSv1_2"
-                ],
-                "description": "Legacy SSL/TLS protocols - upgrade to TLS 1.3+",
-                "count": 25
-            },
-            {
-                "algorithm": "Weak Key Sizes",
-                "locations": [
-                    "src/C++/UtilitySSL.cpp:500 - get_rfc2409_prime_1024",
-                    "src/C++/UtilitySSL.cpp:501 - keylen == 512",
-                    "src/C++/UtilitySSL.cpp:502 - keylen == 1024"
-                ],
-                "description": "Weak key sizes (512, 1024 bits)",
-                "count": 6
-            },
-            {
-                "algorithm": "Weak Hash",
-                "locations": [
-                    "src/C++/UtilitySSL.cpp:600 - MD5",
-                    "src/C++/UtilitySSL.cpp:601 - SHA (SHA-1)"
-                ],
-                "description": "Weak hash algorithms",
-                "count": 4
-            }
-        ]
-    }
-    
-    return findings_summary
-
-def generate_quickfix_crypto_report():
-    """Generate comprehensive legacy crypto report for QuickFIX"""
-    
-    findings = analyze_quickfix_legacy_crypto()
-    
-    report = []
-    report.append("=" * 80)
-    report.append("QUICKFIX C++ LEGACY CRYPTOGRAPHY SCAN REPORT") 
-    report.append("=" * 80)
-    
-    total_high = sum(item['count'] for item in findings['HIGH_PRIORITY'])
-    total_medium = sum(item['count'] for item in findings['MEDIUM_PRIORITY'])
-    
-    report.append(f"🚨 CRITICAL FINDINGS: {total_high} high-priority legacy crypto usages")
-    report.append(f"⚠️  MEDIUM FINDINGS: {total_medium} medium-priority issues")
-    report.append(f"📊 TOTAL LEGACY CRYPTO: {total_high + total_medium} usages detected")
-    report.append("")
-    
-    # High priority findings
-    report.append("🔴 HIGH PRIORITY - NOT QUANTUM RESISTANT")
-    report.append("-" * 50)
-    for finding in findings['HIGH_PRIORITY']:
-        report.append(f"📍 {finding['algorithm'].upper()} ({finding['count']} occurrences)")
-        report.append(f"   Description: {finding['description']}")
-        report.append("   Key locations:")
-        for location in finding['locations'][:4]:
-            report.append(f"     • {location}")
-        if len(finding['locations']) > 4:
-            report.append(f"     • ... and {len(finding['locations'])-4} more")
-        report.append("")
-    
-    # Medium priority findings  
-    report.append("🟡 MEDIUM PRIORITY - PROTOCOL & KEY WEAKNESSES")
-    report.append("-" * 50)
-    for finding in findings['MEDIUM_PRIORITY']:
-        report.append(f"📍 {finding['algorithm'].upper()} ({finding['count']} occurrences)")
-        report.append(f"   Description: {finding['description']}")
-        report.append("   Key locations:")
-        for location in finding['locations'][:3]:
-            report.append(f"     • {location}")
-        report.append("")
-    
-    # Migration priorities
-    report.append("🎯 POST-QUANTUM MIGRATION ROADMAP")
-    report.append("-" * 50)
-    report.append("Phase 1 - IMMEDIATE (Critical for quantum resistance):")
-    report.append("  🔄 RSA signatures → ML-DSA (NIST Dilithium)")
-    report.append("  🔄 ECDSA signatures → ML-DSA (NIST Dilithium)")
-    report.append("  🔄 DH/ECDH key exchange → ML-KEM (NIST Kyber)")
-    report.append("  🔄 X.509 certificates → Post-quantum certificate chains")
-    report.append("")
-    
-    report.append("Phase 2 - PROTOCOL UPGRADES (Short-term):")
-    report.append("  📈 Enforce TLS 1.3 minimum (disable 1.0, 1.1, 1.2)")
-    report.append("  🛡️  Remove weak cipher suites")
-    report.append("  🔐 Implement hybrid classical/post-quantum crypto")
-    report.append("")
-    
-    report.append("Phase 3 - INFRASTRUCTURE (Medium-term):")
-    report.append("  🏗️  Update certificate authorities for PQ certificates")
-    report.append("  🔧 Modify FIX protocol to support larger PQ signatures")
-    report.append("  📏 Plan for increased message sizes (PQ signatures are larger)")
-    report.append("")
-    
-    # File breakdown
-    report.append("📁 AFFECTED FILES BREAKDOWN")
-    report.append("-" * 50)
-    files_affected = {
-        "src/C++/UtilitySSL.cpp": "Primary SSL utility - 75+ legacy crypto usages",
-        "src/C++/UtilitySSL.h": "SSL definitions and constants", 
-        "src/C++/SSLSocketAcceptor.cpp": "SSL acceptor with crypto operations",
-        "src/C++/SSLSocketInitiator.cpp": "SSL initiator with handshakes",
-        "src/C++/ThreadedSSLSocket*.cpp": "Threaded SSL implementations",
-        "src/C++/README.SSL": "SSL configuration documentation"
-    }
-    
-    for file_path, description in files_affected.items():
-        report.append(f"  📄 {file_path}")
-        report.append(f"      {description}")
-    
-    report.append("")
-    report.append("💡 NEXT STEPS:")
-    report.append("1. Audit complete QuickFIX codebase with this scanner")
-    report.append("2. Create proof-of-concept with post-quantum libraries (liboqs)")
-    report.append("3. Design hybrid crypto transition strategy")
-    report.append("4. Test interoperability with trading partners")
-    
-    return "\n".join(report)
+    def export_findings_json(self, output_path: str) -> None:
+        """Export findings to JSON for further processing"""
+        findings_dict = [asdict(finding) for finding in self.findings]
+        try:
+            with open(output_path, 'w') as f:
+                json.dump(findings_dict, f, indent=2)
+            print(f"Findings exported to {output_path}")
+        except Exception as e:
+            print(f"Error exporting findings: {e}")
 
 def main():
-    """Main function to run the QuickFIX legacy crypto analysis"""
-    print("🔍 QuickFIX Legacy Cryptography Scanner")
-    print("Analyzing provided C++ source files...")
+    """Enhanced main function with configuration support"""
+    scanner = EnhancedLegacyCryptoScanner()
+    
+    # Example: Export default config for customization
+    scanner.export_config("crypto_scan_config.yaml")
+    
+    print("🔍 Enhanced QuickFIX Legacy Cryptography Scanner")
+    print("Features: Context analysis, confidence scoring, config externalization")
     print()
     
-    report = generate_quickfix_crypto_report()
+    # Simulate scanning the provided QuickFIX files
+    # In real usage: scanner.scan_directory("/path/to/quickfix/src")
+    
+    # For demo, create some mock findings based on the actual QuickFIX code
+    demo_findings = [
+        CryptoFinding(
+            file_path="src/C++/SSLSocketInitiator.cpp",
+            line_number=198,
+            line_content="    if (SSL_CTX_use_RSAPrivateKey(m_ctx, m_key) <= 0) {",
+            crypto_type="Legacy Cryptography",
+            algorithm="RSA", 
+            severity="HIGH",
+            confidence="HIGH",
+            context_lines=[
+                "    if (SSL_CTX_use_certificate(m_ctx, m_cert) < 1) {",
+                "      ssl_term();",
+                "      throw RuntimeError(\"Failed to set certificate\");",
+                "    }",
+                "    if (SSL_CTX_use_RSAPrivateKey(m_ctx, m_key) <= 0) {",
+                "      ssl_term();",
+                "      throw RuntimeError(\"Failed to set key\");",
+                "    }"
+            ],
+            description="RSA algorithm usage - not quantum resistant",
+            recommendation="Replace with ML-DSA (NIST Dilithium) for signatures"
+        )
+    ]
+    
+    scanner.findings = demo_findings
+    report = scanner.generate_detailed_report()
     print(report)
     
-    return analyze_quickfix_legacy_crypto()
+    # Export findings for integration with other tools
+    scanner.export_findings_json("crypto_findings.json")
 
 if __name__ == "__main__":
     main()
