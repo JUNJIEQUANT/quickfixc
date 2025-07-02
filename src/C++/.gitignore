@@ -1,0 +1,11 @@
+# ---------- Python ----------
+# 忽略任何名字叫 venv 或 .venv 的虚拟环境（支持多级目录）
+**/venv/
+**/.venv/
+
+# 其他常见可选项，按需保留
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
