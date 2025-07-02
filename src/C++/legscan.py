@@ -402,50 +402,103 @@ class EnhancedLegacyCryptoScanner:
             print(f"Error exporting findings: {e}")
 
 def main():
-    """Enhanced main function with configuration support"""
-    scanner = EnhancedLegacyCryptoScanner()
+    """Enhanced main function with real file scanning"""
+    import argparse
+    import sys
     
-    # Example: Export default config for customization
-    scanner.export_config("crypto_scan_config.yaml")
+    parser = argparse.ArgumentParser(description='Enhanced QuickFIX Legacy Cryptography Scanner')
+    parser.add_argument('--path', '-p', default='.', 
+                        help='Path to scan (default: current directory)')
+    parser.add_argument('--config', '-c', 
+                        help='Path to custom configuration file')
+    parser.add_argument('--export-config', action='store_true',
+                        help='Export default configuration to crypto_scan_config.yaml')
+    parser.add_argument('--output', '-o', default='crypto_findings.json',
+                        help='Output JSON file for findings')
+    parser.add_argument('--verbose', '-v', action='store_true',
+                        help='Verbose output showing files being scanned')
+    
+    args = parser.parse_args()
+    
+    scanner = EnhancedLegacyCryptoScanner(args.config)
     
     print("🔍 Enhanced QuickFIX Legacy Cryptography Scanner")
     print("Features: Context analysis, confidence scoring, config externalization")
     print()
     
-    # Simulate scanning the provided QuickFIX files
-    # In real usage: scanner.scan_directory("/path/to/quickfix/src")
+    # Export config if requested
+    if args.export_config:
+        scanner.export_config("crypto_scan_config.yaml")
+        print("✅ Default configuration exported to crypto_scan_config.yaml")
+        print()
     
-    # For demo, create some mock findings based on the actual QuickFIX code
-    demo_findings = [
-        CryptoFinding(
-            file_path="src/C++/SSLSocketInitiator.cpp",
-            line_number=198,
-            line_content="    if (SSL_CTX_use_RSAPrivateKey(m_ctx, m_key) <= 0) {",
-            crypto_type="Legacy Cryptography",
-            algorithm="RSA", 
-            severity="HIGH",
-            confidence="HIGH",
-            context_lines=[
-                "    if (SSL_CTX_use_certificate(m_ctx, m_cert) < 1) {",
-                "      ssl_term();",
-                "      throw RuntimeError(\"Failed to set certificate\");",
-                "    }",
-                "    if (SSL_CTX_use_RSAPrivateKey(m_ctx, m_key) <= 0) {",
-                "      ssl_term();",
-                "      throw RuntimeError(\"Failed to set key\");",
-                "    }"
-            ],
-            description="RSA algorithm usage - not quantum resistant",
-            recommendation="Replace with ML-DSA (NIST Dilithium) for signatures"
-        )
-    ]
+    # Scan the specified path
+    scan_path = os.path.abspath(args.path)
+    print(f"🔍 Scanning path: {scan_path}")
     
-    scanner.findings = demo_findings
+    if not os.path.exists(scan_path):
+        print(f"❌ Error: Path '{scan_path}' does not exist")
+        sys.exit(1)
+    
+    # Count files before scanning
+    cpp_extensions = set(scanner.config.get('file_types', ['.cpp', '.h']))
+    total_files = 0
+    
+    if os.path.isfile(scan_path):
+        if any(scan_path.endswith(ext) for ext in cpp_extensions):
+            total_files = 1
+            if args.verbose:
+                print(f"📄 Scanning file: {scan_path}")
+            scanner.scan_file(scan_path)
+        else:
+            print(f"❌ Error: File '{scan_path}' is not a supported C++ file type")
+            sys.exit(1)
+    else:
+        # Count files first
+        for root, dirs, files in os.walk(scan_path):
+            # Apply directory exclusions
+            exclude_dirs = set(scanner.config.get('exclude_dirs', []))
+            dirs[:] = [d for d in dirs if d not in exclude_dirs]
+            
+            for file in files:
+                if any(file.endswith(ext) for ext in cpp_extensions):
+                    total_files += 1
+        
+        print(f"📊 Found {total_files} C++ files to scan")
+        
+        if args.verbose:
+            print("📁 Scanning files:")
+        
+        # Now scan
+        for root, dirs, files in os.walk(scan_path):
+            # Apply directory exclusions
+            exclude_dirs = set(scanner.config.get('exclude_dirs', []))
+            dirs[:] = [d for d in dirs if d not in exclude_dirs]
+            
+            for file in files:
+                if any(file.endswith(ext) for ext in cpp_extensions):
+                    file_path = os.path.join(root, file)
+                    if args.verbose:
+                        print(f"   📄 {file_path}")
+                    scanner.scan_file(file_path)
+    
+    print(f"✅ Scan complete. Analyzed {total_files} files.")
+    print()
+    
+    # Generate and display report
     report = scanner.generate_detailed_report()
     print(report)
     
-    # Export findings for integration with other tools
-    scanner.export_findings_json("crypto_findings.json")
+    # Export findings
+    if scanner.findings:
+        scanner.export_findings_json(args.output)
+        print(f"\n📄 Detailed findings exported to {args.output}")
+    
+    # Return appropriate exit code for CI/CD
+    high_severity_count = len([f for f in scanner.findings if f.severity == 'HIGH'])
+    if high_severity_count > 0:
+        print(f"\n🚨 WARNING: {high_severity_count} high-severity crypto findings detected!")
+        # Optionally exit with error code for CI/CD: sys.exit(1)
 
 if __name__ == "__main__":
     main()
