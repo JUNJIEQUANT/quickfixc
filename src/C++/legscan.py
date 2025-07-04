@@ -420,73 +420,98 @@ class EnhancedLegacyCryptoScanner:
     def determine_usage_type(self, line: str, context_lines: List[str], algorithm: str) -> str:
         """Determine the usage type based on context analysis"""
         combined_text = line + ' ' + ' '.join(context_lines)
+        line_lower = line.lower()
         
-        # Signature-related patterns
-        signature_patterns = [
-            r'sign(?:ature)?',
-            r'verify',
-            r'RSA.*(?:sign|verify)',
-            r'DSA.*(?:sign|verify)', 
-            r'ECDSA.*(?:sign|verify)',
-            r'certificate',
-            r'auth(?:entication)?',
-            r'private.*key.*sign',
-            r'public.*key.*verify'
-        ]
+        # High-priority specific API patterns (most precise)
+        specific_api_patterns = {
+            'Key Exchange': [
+                r'ssl_callback_tmpdh\b',
+                r'SSL_CTX_set_tmp_(?:dh|ecdh)\s*\(',
+                r'DH_generate_parameters\s*\(',
+                r'EC_KEY_new_by_curve_name\s*\(',
+                r'tmp.*(?:dh|ecdh)',
+                r'ephemeral.*key',
+                r'EVP_PKEY_(?:RSA|DSA).*(?:in.*dh|tmp.*dh|callback.*dh)',
+            ],
+            'Signature': [
+                r'SSL_CTX_use_(?:certificate|PrivateKey)\s*\(',
+                r'PEM_read.*(?:certificate|PrivateKey)\s*\(',
+                r'X509.*(?:sign|verify)',
+                r'RSA.*(?:sign|verify)',
+                r'DSA.*(?:sign|verify)',
+                r'ECDSA.*(?:sign|verify)',
+            ],
+            'Encryption': [
+                r'(?:encrypt|decrypt).*(?:RSA|AES)',
+                r'RSA.*(?:encrypt|decrypt)',
+                r'cipher.*(?:encrypt|decrypt)',
+            ],
+            'Protocol/Transport': [
+                r'SSL_PROTOCOL_\w+',
+                r'TLS.*(?:method|version)',
+                r'SSL.*(?:method|version)',
+            ]
+        }
         
-        # Encryption-related patterns  
-        encryption_patterns = [
-            r'encrypt',
-            r'decrypt',
-            r'cipher',
-            r'RSA.*(?:encrypt|decrypt)',
-            r'AES.*(?:encrypt|decrypt)',
-            r'private.*key.*decrypt',
-            r'public.*key.*encrypt'
-        ]
+        # Check specific API patterns first (highest priority)
+        for usage_type, patterns in specific_api_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, combined_text, re.IGNORECASE):
+                    return usage_type
         
-        # Key exchange patterns
-        key_exchange_patterns = [
-            r'DH.*(?:exchange|handshake)',
-            r'ECDH.*(?:exchange|handshake)', 
-            r'key.*exchange',
-            r'key.*agreement',
-            r'handshake',
-            r'tmp.*(?:dh|ecdh)',
-            r'ephemeral.*key'
-        ]
+        # Function context analysis
+        function_context_patterns = {
+            'Key Exchange': [
+                r'(?:tmp|temp|ephemeral).*(?:dh|ecdh|key)',
+                r'dh.*(?:callback|param|generate)',
+                r'key.*(?:exchange|agreement)',
+                r'handshake.*(?:dh|ecdh)',
+            ],
+            'Signature': [
+                r'(?:sign|verify).*(?:cert|key)',
+                r'certificate.*(?:load|use|set)',
+                r'private.*key.*(?:load|use|set)',
+                r'auth(?:entication)?.*key',
+            ]
+        }
         
-        # Protocol/Transport patterns
-        protocol_patterns = [
-            r'SSL.*(?:protocol|version)',
-            r'TLS.*(?:protocol|version)',
-            r'protocol.*version',
-            r'ssl.*method',
-            r'tls.*method'
-        ]
+        for usage_type, patterns in function_context_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, combined_text, re.IGNORECASE):
+                    return usage_type
         
-        # Check patterns in order of specificity
-        for pattern in signature_patterns:
-            if re.search(pattern, combined_text, re.IGNORECASE):
-                return "Signature"
-                
-        for pattern in encryption_patterns:
-            if re.search(pattern, combined_text, re.IGNORECASE):
-                return "Encryption"
-                
-        for pattern in key_exchange_patterns:
-            if re.search(pattern, combined_text, re.IGNORECASE):
-                return "Key Exchange"
-                
-        for pattern in protocol_patterns:
-            if re.search(pattern, combined_text, re.IGNORECASE):
-                return "Protocol/Transport"
+        # Variable name analysis  
+        if re.search(r'(?:tmp|temp|ephemeral).*(?:dh|ecdh)', line_lower):
+            return "Key Exchange"
+        if re.search(r'(?:cert|certificate|private.*key)', line_lower):
+            return "Signature"
+            
+        # Original broad patterns (lower priority)
+        broad_patterns = {
+            'Signature': [
+                r'sign(?:ature)?', r'verify', r'certificate', r'auth(?:entication)?'
+            ],
+            'Encryption': [
+                r'encrypt', r'decrypt', r'cipher'
+            ],
+            'Key Exchange': [
+                r'key.*exchange', r'key.*agreement', r'handshake'
+            ],
+            'Protocol/Transport': [
+                r'protocol.*version', r'ssl.*method', r'tls.*method'
+            ]
+        }
         
-        # Algorithm-based defaults when context is unclear
+        for usage_type, patterns in broad_patterns.items():
+            for pattern in patterns:
+                if re.search(pattern, combined_text, re.IGNORECASE):
+                    return usage_type
+        
+        # Algorithm-based defaults (last resort)
         algorithm_defaults = {
-            'RSA': 'Signature/Encryption',
+            'RSA': 'Signature',           # Most common RSA usage
             'DSA': 'Signature', 
-            'ECDSA_EC': 'Signature/Key Exchange',
+            'ECDSA_EC': 'Key Exchange',   # Context usually shows ECDH
             'DH': 'Key Exchange',
             'Legacy_TLS': 'Protocol/Transport',
             'Weak_Cipher': 'Encryption',

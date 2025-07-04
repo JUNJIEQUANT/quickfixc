@@ -228,7 +228,7 @@
     ],
     "description": "Diffie-Hellman key exchange - not quantum resistant",
     "recommendation": "Replace with ML-KEM (NIST Kyber) for key exchange",
-    "usage_type": "Signature"
+    "usage_type": "Key Exchange"
   },
   {
     "file_path": "/home/jl1335/quickfixc/src/C++/UtilitySSL.cpp",
@@ -249,7 +249,7 @@
     ],
     "description": "Diffie-Hellman key exchange - not quantum resistant",
     "recommendation": "Replace with ML-KEM (NIST Kyber) for key exchange",
-    "usage_type": "Signature"
+    "usage_type": "Key Exchange"
   },
   {
     "file_path": "/home/jl1335/quickfixc/src/C++/UtilitySSL.cpp",
@@ -270,7 +270,7 @@
     ],
     "description": "Diffie-Hellman key exchange - not quantum resistant",
     "recommendation": "Replace with ML-KEM (NIST Kyber) for key exchange",
-    "usage_type": "Signature"
+    "usage_type": "Key Exchange"
   },
   {
     "file_path": "/home/jl1335/quickfixc/src/C++/UtilitySSL.cpp",
@@ -291,7 +291,7 @@
     ],
     "description": "RSA algorithm usage - not quantum resistant",
     "recommendation": "Replace with ML-DSA (NIST Dilithium) for signatures",
-    "usage_type": "Signature/Encryption"
+    "usage_type": "Key Exchange"
   },
   {
     "file_path": "/home/jl1335/quickfixc/src/C++/UtilitySSL.cpp",
@@ -312,7 +312,7 @@
     ],
     "description": "DSA algorithm usage - not quantum resistant",
     "recommendation": "Replace with ML-DSA (NIST Dilithium) for signatures",
-    "usage_type": "Signature"
+    "usage_type": "Key Exchange"
   },
   {
     "file_path": "/home/jl1335/quickfixc/src/C++/UtilitySSL.cpp",
@@ -522,7 +522,7 @@
     ],
     "description": "ECDSA/EC algorithm usage - not quantum resistant",
     "recommendation": "Replace ECDSA with ML-DSA, ECDH with ML-KEM (Kyber)",
-    "usage_type": "Signature/Key Exchange"
+    "usage_type": "Key Exchange"
   },
   {
     "file_path": "/home/jl1335/quickfixc/src/C++/UtilitySSL.cpp",
@@ -543,7 +543,7 @@
     ],
     "description": "ECDSA/EC algorithm usage - not quantum resistant",
     "recommendation": "Replace ECDSA with ML-DSA, ECDH with ML-KEM (Kyber)",
-    "usage_type": "Signature/Key Exchange"
+    "usage_type": "Key Exchange"
   },
   {
     "file_path": "/home/jl1335/quickfixc/src/C++/UtilitySSL.cpp",
