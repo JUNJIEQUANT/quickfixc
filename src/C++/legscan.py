@@ -30,6 +30,7 @@ class CryptoFinding:
     context_lines: List[str]
     description: str
     recommendation: str
+    usage_type: str
 
 class EnhancedLegacyCryptoScanner:
     def __init__(self, config_path: Optional[str] = None):
@@ -280,6 +281,7 @@ class EnhancedLegacyCryptoScanner:
                         if match:
                             context_lines = self.get_context_lines(lines, line_num)
                             confidence = self.calculate_confidence(line, context_lines, crypto_type)
+                            usage_type = self.determine_usage_type(line, context_lines, crypto_type)
                             
                             # Only include medium/high confidence findings
                             if confidence != ConfidenceLevel.LOW:
@@ -293,7 +295,8 @@ class EnhancedLegacyCryptoScanner:
                                     confidence=confidence.value,
                                     context_lines=[l.rstrip() for l in context_lines],
                                     description=config['description'],
-                                    recommendation=config['recommendation']
+                                    recommendation=config['recommendation'],
+                                    usage_type=usage_type
                                 )
                                 self.findings.append(finding)
                                 
@@ -358,6 +361,7 @@ class EnhancedLegacyCryptoScanner:
                 for finding in alg_findings[:3]:
                     report.append(f"   📄 {finding.file_path}:{finding.line_number}")
                     report.append(f"      Code: {finding.line_content}")
+                    report.append(f"      Usage: {finding.usage_type}")
                     
                     # Show relevant context
                     if finding.context_lines:
@@ -412,6 +416,114 @@ class EnhancedLegacyCryptoScanner:
             print(f"Findings exported to {output_path}")
         except Exception as e:
             print(f"Error exporting findings: {e}")
+    
+    def determine_usage_type(self, line: str, context_lines: List[str], algorithm: str) -> str:
+        """Determine the usage type based on context analysis"""
+        combined_text = line + ' ' + ' '.join(context_lines)
+        
+        # Signature-related patterns
+        signature_patterns = [
+            r'sign(?:ature)?',
+            r'verify',
+            r'RSA.*(?:sign|verify)',
+            r'DSA.*(?:sign|verify)', 
+            r'ECDSA.*(?:sign|verify)',
+            r'certificate',
+            r'auth(?:entication)?',
+            r'private.*key.*sign',
+            r'public.*key.*verify'
+        ]
+        
+        # Encryption-related patterns  
+        encryption_patterns = [
+            r'encrypt',
+            r'decrypt',
+            r'cipher',
+            r'RSA.*(?:encrypt|decrypt)',
+            r'AES.*(?:encrypt|decrypt)',
+            r'private.*key.*decrypt',
+            r'public.*key.*encrypt'
+        ]
+        
+        # Key exchange patterns
+        key_exchange_patterns = [
+            r'DH.*(?:exchange|handshake)',
+            r'ECDH.*(?:exchange|handshake)', 
+            r'key.*exchange',
+            r'key.*agreement',
+            r'handshake',
+            r'tmp.*(?:dh|ecdh)',
+            r'ephemeral.*key'
+        ]
+        
+        # Protocol/Transport patterns
+        protocol_patterns = [
+            r'SSL.*(?:protocol|version)',
+            r'TLS.*(?:protocol|version)',
+            r'protocol.*version',
+            r'ssl.*method',
+            r'tls.*method'
+        ]
+        
+        # Check patterns in order of specificity
+        for pattern in signature_patterns:
+            if re.search(pattern, combined_text, re.IGNORECASE):
+                return "Signature"
+                
+        for pattern in encryption_patterns:
+            if re.search(pattern, combined_text, re.IGNORECASE):
+                return "Encryption"
+                
+        for pattern in key_exchange_patterns:
+            if re.search(pattern, combined_text, re.IGNORECASE):
+                return "Key Exchange"
+                
+        for pattern in protocol_patterns:
+            if re.search(pattern, combined_text, re.IGNORECASE):
+                return "Protocol/Transport"
+        
+        # Algorithm-based defaults when context is unclear
+        algorithm_defaults = {
+            'RSA': 'Signature/Encryption',
+            'DSA': 'Signature', 
+            'ECDSA_EC': 'Signature/Key Exchange',
+            'DH': 'Key Exchange',
+            'Legacy_TLS': 'Protocol/Transport',
+            'Weak_Cipher': 'Encryption',
+            'Weak_Key_Size': 'General'
+        }
+        
+        return algorithm_defaults.get(algorithm, 'Unknown')
+    
+    def export_findings_csv(self, output_path: str) -> None:
+        """Export findings to CSV for analysis"""
+        import csv
+        
+        try:
+            with open(output_path, 'w', newline='', encoding='utf-8') as csvfile:
+                fieldnames = [
+                    'file_path', 'line_number', 'algorithm', 'usage_type', 
+                    'severity', 'confidence', 'description', 'recommendation',
+                    'line_content'
+                ]
+                writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                
+                writer.writeheader()
+                for finding in self.findings:
+                    writer.writerow({
+                        'file_path': finding.file_path,
+                        'line_number': finding.line_number,
+                        'algorithm': finding.algorithm,
+                        'usage_type': finding.usage_type,
+                        'severity': finding.severity,
+                        'confidence': finding.confidence,
+                        'description': finding.description,
+                        'recommendation': finding.recommendation,
+                        'line_content': finding.line_content
+                    })
+            print(f"CSV findings exported to {output_path}")
+        except Exception as e:
+            print(f"Error exporting CSV: {e}")
 
 def main():
     """Enhanced main function with real file scanning"""
@@ -427,6 +539,8 @@ def main():
                         help='Export default configuration to crypto_scan_config.yaml')
     parser.add_argument('--output', '-o', default='crypto_findings.json',
                         help='Output JSON file for findings')
+    parser.add_argument('--csv', default='crypto_findings.csv',  
+                        help='Output CSV file for findings')
     parser.add_argument('--verbose', '-v', action='store_true',
                         help='Verbose output showing files being scanned')
     
@@ -504,6 +618,7 @@ def main():
     # Export findings
     if scanner.findings:
         scanner.export_findings_json(args.output)
+        scanner.export_findings_csv(args.csv)
         print(f"\n📄 Detailed findings exported to {args.output}")
     
     # Return appropriate exit code for CI/CD
@@ -511,6 +626,8 @@ def main():
     if high_severity_count > 0:
         print(f"\n🚨 WARNING: {high_severity_count} high-severity crypto findings detected!")
         # Optionally exit with error code for CI/CD: sys.exit(1)
+    
+    
 
 if __name__ == "__main__":
     main()
